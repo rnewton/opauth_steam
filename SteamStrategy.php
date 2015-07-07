@@ -24,20 +24,7 @@ class SteamStrategy extends OpauthStrategy{
     /**
      * Compulsory config keys, listed as unassociative arrays
      */
-    public $expects = array('key', 'domain');
-    
-    /**
-     * Optional config keys, without predefining any default values.
-     */
-    public $optionals = array();
-    
-    /**
-     * Optional config keys with respective default values, listed as associative arrays
-     * eg. array('scope' => 'email');
-     */
-    public $defaults = array(
-        'identity' => 'http://steamcommunity.com/openid'
-    );
+    public $expects = array('key', 'domain', 'callback_url');
     
     /**
      * @var LightOpenID
@@ -47,6 +34,7 @@ class SteamStrategy extends OpauthStrategy{
     public function __construct($strategy, $env)
     {
         parent::__construct($strategy, $env);
+        $this->strategy['strategy_callback_url'] = $this->strategy['callback_url'];
         
         $this->openid = new LightOpenID($this->strategy['domain']);
     }
@@ -57,65 +45,69 @@ class SteamStrategy extends OpauthStrategy{
     public function request()
     {
         if (!$this->openid->mode){
-            if (empty($_POST['openid_url'])){
-                $this->render($this->strategy['identifier_form']);
-            }
-            else{
-                $this->openid->identity = $_POST['openid_url'];
-                try{
-                    $this->redirect($this->openid->authUrl());
-                } catch (Exception $e){
-                    $error = array(
-                        'provider' => 'Steam',
-                        'code' => 'bad_identifier',
-                        'message' => $e->getMessage()
-                    );
-
-                    $this->errorCallback($error);
-                }
-            }
-        }
-        elseif ($this->openid->mode == 'cancel'){
-            $error = array(
+            $this->openid->identity = 'http://steamcommunity.com/openid';
+            header('Location: ' . $this->openid->authUrl());
+            exit();
+        } else if ($this->openid->mode == 'cancel') {
+            $this->errorCallback(array(
                 'provider' => 'Steam',
                 'code' => 'cancel_authentication',
                 'message' => 'User has canceled authentication'
-            );
-
-            $this->errorCallback($error);
-        }
-        elseif (!$this->openid->validate()){
-            $error = array(
+            ));
+        } else if (!$this->openid->validate()) {
+            $this->errorCallback(array(
                 'provider' => 'Steam',
                 'code' => 'not_logged_in',
                 'message' => 'User has not logged in'
-            );
+            ));
+        } else {
+            $steamId = '';
+            if (preg_match('/http:\/\/steamcommunity.com\/openid\/id\/(\d+)/', $this->openid->data['openid_identity'], $matches)) {
+                $steamId = $matches[1];
+            }
 
-            $this->errorCallback($error);
-        }
-        else{
-            $attributes = $this->openid->getAttributes();
-
-            ddd($attributes);
+            $userInfo = $this->userInfo($steamId);
+            
             $this->auth = array(
                 'provider' => 'Steam',
-                'uid' => $this->openid->identity,
-                'info' => array(),
-                'credentials' => array(),
-                'raw' => $this->openid->getAttributes()
+                'uid' => $steamId,
+                'info' => $userInfo,
+                'credentials' => $this->openid->getAttributes(),
+                'raw' => $userInfo
             );
-            
-            if (!empty($attributes['contact/email'])) $this->auth['info']['email'] = $attributes['contact/email'];
-            if (!empty($attributes['namePerson'])) $this->auth['info']['name'] = $attributes['namePerson'];
-            if (!empty($attributes['fullname'])) $this->auth['info']['name'] = $attributes['fullname'];
-            if (!empty($attributes['namePerson/first'])) $this->auth['info']['first_name'] = $attributes['namePerson/first'];
-            if (!empty($attributes['namePerson/last'])) $this->auth['info']['last_name'] = $attributes['namePerson/last'];
-            if (!empty($attributes['namePerson/friendly'])) $this->auth['info']['nickname'] = $attributes['namePerson/friendly'];
-            if (!empty($attributes['contact/phone'])) $this->auth['info']['phone'] = $attributes['contact/phone'];
-            if (!empty($attributes['contact/web'])) $this->auth['info']['urls']['website'] = $attributes['contact/web'];
-            if (!empty($attributes['media/image'])) $this->auth['info']['image'] = $attributes['media/image'];
-            
+
             $this->callback();
         }
+    }
+
+    private function userInfo($steamId)
+    {
+        if (empty($steamId)) {
+            $this->errorCallback(array(
+                'provider' => 'Steam',
+                'code' => 'steam_id_missing',
+                'message' => 'No steam ID supplied'
+            ));
+        }
+
+        //We mute alerts from the following line because we do not want to give away our API key in case file_get_contents() throws a warning.
+        @$data = file_get_contents("http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=".$this->strategy['key']."&steamids=".$steamId);
+
+        if (false === $data) {
+            $this->errorCallback(array(
+                'provider' => 'Steam',
+                'code' => 'user_callback',
+                'message' => 'User information query failed'
+            ));
+        }
+
+        $data = json_decode($data, true)['response']['players'][0];
+
+        return array(
+            'name' => $data['realname'],
+            'nickname' => $data['personaname'],
+            'image' => $data['avatarfull']
+            // Nothing else in $data is especially useful outside of the context of steam
+        );
     }
 }
