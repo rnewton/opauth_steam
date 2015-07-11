@@ -11,7 +11,7 @@
         }
     ],
     "require": {
-        "lightopenid/lightopenid": "^0.7.0"
+        "rnewton/lightopenid": "^0.7.0"
     },
     "autoload": {
         "psr-0": {
